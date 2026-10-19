@@ -131,3 +131,28 @@ test('a player can reapply after their previous application was rejected', async
   await new Promise(resolve => server.close(resolve));
  }
 });
+
+test('session resume returns the latest finished game when no active game remains', async () => {
+ resetForTest();
+ const server = http.createServer(handler);
+ await new Promise(resolve => server.listen(0, resolve));
+ try {
+  const token = (await request(server, 'POST', '/api/auth/anonymous', null, { nickname: '断线恢复' })).body.token;
+  const userId = JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString()).id;
+  const now = new Date().toISOString();
+  const finishedState = { board: Array.from({ length: 9 }, () => Array(9).fill(0)), current: 2, passes: 0, finished: true, finishedReason: 'resignation', resignedBy: 'opponent', winner: 1, totalRemainingMs: 55_000, moveRemainingMs: 25_000, turnStartedAt: now };
+  resetForTest({ rooms: {}, sessions: {
+   game_old: { id: 'game_old', roomId: 'room_old', boardSize: 9, players: { black: userId, white: 'other' }, state: { ...finishedState, finishedReason: 'two-passes', passes: 2 }, createdAt: now, updatedAt: new Date(Date.now() - 60_000).toISOString() },
+   game_latest: { id: 'game_latest', roomId: 'room_latest', boardSize: 9, players: { black: 'other', white: userId }, state: finishedState, createdAt: now, updatedAt: now }
+  } });
+  const result = await request(server, 'GET', '/api/sessions', token);
+  assert.equal(result.status, 200);
+  assert.equal(result.body.sessions.length, 1);
+  assert.equal(result.body.sessions[0].session.id, 'game_latest');
+  assert.equal(result.body.sessions[0].session.state.finished, true);
+  assert.equal(result.body.sessions[0].session.state.finishedReason, 'resignation');
+  assert.equal(result.body.sessions[0].color, 2);
+ } finally {
+  await new Promise(resolve => server.close(resolve));
+ }
+});
